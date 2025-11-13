@@ -34,6 +34,8 @@
 #include <unordered_set>
 #include <stack>
 #include <time.h>
+#include <boost/bind.hpp> // 确保包含了 boost::bind
+#include <mission_planner/GetGlobalCoverage.h> 
 
 namespace
 {
@@ -125,11 +127,17 @@ bool isInParkingLot(
 
 namespace mission_planner
 {
-MissionPlannerLanelet2::MissionPlannerLanelet2() : is_graph_ready_(false)
+MissionPlannerLanelet2::MissionPlannerLanelet2() : is_graph_ready_(false), nh_() 
 {
+    // ★ 从参数服务器读取 vehicle_id
+  pnh_.getParam("vehicle_id", vehicle_id_);
+  
+  ROS_INFO_STREAM("Vehicle ID: " << vehicle_id_);
+  
   map_subscriber_ =
     pnh_.subscribe("input/vector_map", 10, &MissionPlannerLanelet2::mapCallback, this);
 }
+
 
 void MissionPlannerLanelet2::mapCallback(const autoware_lanelet2_msgs::MapBin & msg)
 {
@@ -143,24 +151,29 @@ bool MissionPlannerLanelet2::isRoutingGraphReady() const { return (is_graph_read
 
 void MissionPlannerLanelet2::visualizeRoute(const autoware_planning_msgs::Route & route) const
 {
-  lanelet::ConstLanelets route_lanelets;
-  lanelet::ConstLanelets end_lanelets;
-  lanelet::ConstLanelets normal_lanelets;
-  lanelet::ConstLanelets goal_lanelets;
+  lanelet::ConstLanelets route_lanelets;      // 所有路由车道
+  lanelet::ConstLanelets end_lanelets;        // 死胡同车道（无后继）
+  lanelet::ConstLanelets normal_lanelets;     // 可变道车道
+  lanelet::ConstLanelets goal_lanelets;       // 首选车道（主路线）
 
   for (const auto & route_section : route.route_sections) {
     for (const auto & lane_id : route_section.lane_ids) {
       auto lanelet = lanelet_map_ptr_->laneletLayer.get(lane_id);
       route_lanelets.push_back(lanelet);
+      
+      // 分类逻辑
       if (route_section.preferred_lane_id == lane_id) {
+        // 这是首选车道（主路线）
         goal_lanelets.push_back(lanelet);
       } else if (exists(route_section.continued_lane_ids, lane_id)) {
+        // 这是可继续行驶的车道（可变道）
         normal_lanelets.push_back(lanelet);
       } else {
+        // 这是其他可选车道
         end_lanelets.push_back(lanelet);
       }
     }
-  }
+  } 
 
   std_msgs::ColorRGBA cl_route, cl_ll_borders, cl_end, cl_normal, cl_goal;
   setColor(&cl_route, 0.0, 0.7, 0.2, 0.5);
@@ -226,12 +239,16 @@ bool MissionPlannerLanelet2::isGoalValid() const
 
 autoware_planning_msgs::Route MissionPlannerLanelet2::planRoute()
 {
+    // ★ 添加：打印哪个车辆在规划路线
+  ROS_INFO_STREAM("Vehicle " << vehicle_id_ << " is planning route");
+  
   std::stringstream ss;
   for (const auto & checkpoint : checkpoints_) {
     ss << "x: " << checkpoint.pose.position.x << " "
        << "y: " << checkpoint.pose.position.y << std::endl;
   }
-  ROS_INFO_STREAM("start planning route with checkpoints: " << std::endl << ss.str());
+  ROS_INFO_STREAM("Vehicle " << vehicle_id_ << " - start planning route with checkpoints: " 
+                  << std::endl << ss.str());
 
   autoware_planning_msgs::Route route_msg;
   RouteSections route_sections;
@@ -345,8 +362,27 @@ RouteSections MissionPlannerLanelet2::createRouteSections(
 bool MissionPlannerLanelet2::planFullCoveragePath(
   const geometry_msgs::PoseStamped & start_checkpoint,
   const geometry_msgs::PoseStamped & goal_checkpoint,
-  lanelet::ConstLanelets * path_lanelets_ptr) const
+  lanelet::ConstLanelets * path_lanelets_ptr)
 {
+  // --- 新增：获取全局已覆盖Lanelet集合 ---
+  std::unordered_set<lanelet::Id> global_covered_set;
+  {
+      // 创建服务客户端，指向协调节点提供的服务
+      ros::ServiceClient client = nh_.serviceClient<mission_planner::GetGlobalCoverage>("get_global_coverage");
+      // 调用服务
+      mission_planner::GetGlobalCoverage srv; // 或者 autoware_planning_msgs::GetGlobalCoverage，取决于服务定义
+      if (client.call(srv)) {
+          // 将服务响应中的ID列表转换为unordered_set
+          global_covered_set.insert(srv.response.covered_lanelet_ids.begin(), srv.response.covered_lanelet_ids.end());
+          ROS_DEBUG("Vehicle %d: Retrieved global coverage set with %ld lanelets.", vehicle_id_, global_covered_set.size());
+      } else {
+          ROS_WARN("Vehicle %d: Failed to call get_global_coverage service. Proceeding without global coverage info.", vehicle_id_);
+          // 可以选择返回false或继续（相当于单车规划）
+          // return false; // 如果强制需要全局信息
+      }
+  }
+  // --- 新增结束 ---
+
   clock_t begin = clock();
 
   lanelet::Lanelet start_lanelet;
@@ -360,8 +396,14 @@ bool MissionPlannerLanelet2::planFullCoveragePath(
 
   // lanelet::ConstLanelet lanelet = lanelet_map_ptr_->laneletLayer.get();
   lanelet::ConstLanelets full_coverage_path;
-  std::unordered_set<lanelet::Id> visited_lanelet;
+  std::unordered_set<lanelet::Id> visited_lanelet; // 本车本次规划中已访问的Lanelet
   std::stack<lanelet::ConstLanelet> dfs_stk;
+
+  // 检查起始Lanelet是否被全局占用
+  if (global_covered_set.count(start_lanelet.id())) {
+       ROS_WARN("Start lanelet %ld is already globally covered. Planning might fail or find suboptimal path.", start_lanelet.id());
+  }
+
   // visited_lanelet.emplace(start_lanelet.id());
   dfs_stk.push(start_lanelet);
   full_coverage_path.push_back(start_lanelet);
@@ -369,9 +411,16 @@ bool MissionPlannerLanelet2::planFullCoveragePath(
   // while(full_coverage_path.size() < 30)
   {
     lanelet::ConstLanelet pose_lanelet = full_coverage_path.back();    // the pose of vehicle now
-    lanelet::ConstLanelet cur_lanelet = dfs_stk.top(); // the lanelet that will be processed 
+    lanelet::ConstLanelet cur_lanelet = dfs_stk.top(); // the lanelet that will be processed
     dfs_stk.pop();
-    
+
+    // --- 核心修改：检查当前Lanelet是否被全局占用 ---
+    if (global_covered_set.count(cur_lanelet.id())) {
+        // ROS_DEBUG("Skipping lanelet %ld, already globally covered.", cur_lanelet.id());
+        continue; // 跳过已被全局覆盖的Lanelet
+    }
+    // --- 核心修改结束 ---
+
     if(!visited_lanelet.count(cur_lanelet.id())){
       // connect backtracking lanelet with current pose lanelet
       if (pose_lanelet != cur_lanelet) {
@@ -388,22 +437,42 @@ bool MissionPlannerLanelet2::planFullCoveragePath(
         const lanelet::routing::LaneletPath back_path = back_route->shortestPath();
         full_coverage_path.pop_back();
         for (const auto& llt : back_path) {
+          // --- 核心修改：检查回溯路径上的Lanelet是否被全局占用 ---
+          if (global_covered_set.count(llt.id())) {
+              // ROS_DEBUG("Backtrack path contains lanelet %ld, already globally covered. Planning might fail.", llt.id());
+              break; // 跳出回溯循环，回到主DFS循环
+          }
+          // --- 核心修改结束 ---
+
           if(!visited_lanelet.count(llt.id())){
             visited_lanelet.emplace(llt.id());
           }
           full_coverage_path.push_back(llt);
           lanelet::ConstLanelets following_llts = routing_graph_ptr_->following(llt);
           for (const auto & following_llt : following_llts){
-            dfs_stk.push(following_llt);
+            // --- 核心修改：检查下一个Lanelet是否被全局占用 ---
+            if (!global_covered_set.count(following_llt.id())) {
+                dfs_stk.push(following_llt);
+            } else {
+                // ROS_DEBUG("Skipping following lanelet %ld, already globally covered.", following_llt.id());
+            }
+            // --- 核心修改结束 ---
           }
         }
       }
 
       lanelet::ConstLanelets following_lanelets = routing_graph_ptr_->following(cur_lanelet);
       for (const auto & following_llt : following_lanelets){
-        dfs_stk.push(following_llt);
+        // dfs_stk.push(following_llt);
+        // --- 核心修改：检查下一个Lanelet是否被全局占用 ---
+        if (!global_covered_set.count(following_llt.id())) {
+            dfs_stk.push(following_llt);
+        } else {
+            // ROS_DEBUG("Skipping following lanelet %ld, already globally covered.", following_llt.id());
+        }
+        // --- 核心修改结束 ---
       }
-      
+
       visited_lanelet.emplace(cur_lanelet.id());
       full_coverage_path.push_back(cur_lanelet);
     }
@@ -422,6 +491,15 @@ bool MissionPlannerLanelet2::planFullCoveragePath(
   const lanelet::routing::LaneletPath last_path = last_route->shortestPath();
   full_coverage_path.pop_back();
   for (const auto& llt : last_path) {
+    // --- 核心修改：检查到目标的路径上的Lanelet是否被全局占用 ---
+    if (global_covered_set.count(llt.id())) {
+        // ROS_DEBUG("Path to goal contains lanelet %ld, already globally covered. Planning might fail.", llt.id());
+        ROS_WARN("Path to goal contains lanelet %ld, already globally covered. Planning failed.", llt.id());
+        return false;
+    }
+    // --- 核心修改结束 ---
+
+
     if(!visited_lanelet.count(llt.id())){
       visited_lanelet.emplace(llt.id());
     }
@@ -445,8 +523,8 @@ bool MissionPlannerLanelet2::planFullCoveragePath(
 
 void MissionPlannerLanelet2::visualizeRouteStepByStep(const autoware_planning_msgs::Route & route) const
 {
-  lanelet::ConstLanelets route_lanelets;
-  ros::Rate r(4);
+  lanelet::ConstLanelets route_lanelets;     // 累积显示的车道
+  ros::Rate r(5);                             // 1Hz 速率
 
   for (const auto & route_section : route.route_sections) {
     auto lanelet = lanelet_map_ptr_->laneletLayer.get(route_section.preferred_lane_id);
@@ -456,8 +534,8 @@ void MissionPlannerLanelet2::visualizeRouteStepByStep(const autoware_planning_ms
     current_lanelets.push_back(lanelet);
 
     std_msgs::ColorRGBA cl_route, cl_cur_llt;
-    setColor(&cl_route, 1.0, 1.0, 0.0, 0.5);
-    setColor(&cl_cur_llt, 1.0, 0.0, 0.0, 0.5);
+    setColor(&cl_route, 1.0, 1.0, 0.0, 0.5);      // 黄色（已规划的路由）
+    setColor(&cl_cur_llt, 1.0, 0.0, 0.0, 0.5);    // 红色（当前段）
     
     visualization_msgs::MarkerArray route_marker_array;
     insertMarkerArray(

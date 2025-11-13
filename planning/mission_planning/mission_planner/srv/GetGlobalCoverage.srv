@@ -1,0 +1,5 @@
+# mission_planner/srv/GetGlobalCoverage.srv
+# Request (Empty)
+---
+# Response
+uint64[] covered_lanelet_ids

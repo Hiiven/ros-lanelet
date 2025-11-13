@@ -104,7 +104,7 @@ void lightAsMarker(
   marker->pose.orientation.z = 0.0;
   marker->pose.orientation.w = 1.0;
 
-  float s = 0.3;
+  float s = 0.8;
 
   marker->scale.x = s;
   marker->scale.y = s;
@@ -160,7 +160,7 @@ void laneletDirectionAsMarker(
   lanelet::BasicPoint3d pc, pc2;
 
   lanelet::ConstLineString3d center_ls = ll.centerline();
-  float s = 1.0;
+  float s = 2.0;
 
   marker->pose.position.x = 0.0;  // p.x();
   marker->pose.position.y = 0.0;  // p.y();
@@ -777,8 +777,17 @@ void visualization::trafficLight2TriangleMarker(
     lanelet::Attribute attr = ls.attribute("height");
     h = std::stod(attr.value());
   }
+  // 添加：获取 traffic light 之间的间隔属性
+  double spacing = 1.5;  // 默认间隔 1.5 米
+  if (ls.hasAttribute("spacing")) {
+    lanelet::Attribute attr = ls.attribute("spacing");
+    spacing = std::stod(attr.value());
+  }
+  
+  // 根据 scale 调整间隔
+  spacing = spacing * scale;
 
-  // construct triangles and add to marker
+  
 
   // define polygon of traffic light border
   Eigen::Vector3d v[4];
@@ -794,6 +803,24 @@ void visualization::trafficLight2TriangleMarker(
       v[i] = (v[i] - c) * scale + c;
     }
   }
+
+  // ★ 新增：根据 spacing 调整灯与灯之间的间隔 ★
+  // 如果 spacing 与原始间隔不同，需要缩放点之间的距离
+  if (spacing != 1.5) {  // 如果间隔改变了
+    double spacing_ratio = spacing / 1.5;  // 计算比例
+    
+    // 计算前后两点的方向
+    Eigen::Vector3d direction = (v[1] - v[0]).normalized();
+    
+    // 根据间隔比例重新计算后两个点的位置
+    Eigen::Vector3d offset = (v[1] - v[0]) * (spacing_ratio - 1.0) * 0.5;
+    v[0] -= offset;
+    v[1] += offset;
+    v[2] -= offset;
+    v[3] += offset;
+  }
+  
+  // construct triangles and add to marker
   geometry_msgs::Point tri0[3];
   utils::conversion::toGeomMsgPt(v[0], &tri0[0]);
   utils::conversion::toGeomMsgPt(v[1], &tri0[1]);

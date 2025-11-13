@@ -1,0 +1,67 @@
+<launch>
+
+<include file="$(find map_loader)/launch/lanelet2_map_loader.launch"/>
+
+<!-- ========== Central Coordinator (in mission_planner pkg) ========== -->
+<node pkg="mission_planner" type="multi_vehicle_coordinator_node" name="multi_vehicle_coordinator" output="screen">
+  <param name="num_vehicles" value="3" />
+</node>
+
+
+  <!-- ========== 车辆1 ========== -->
+  <group ns="vehicle_1">
+    <param name="vehicle_id" value="1" />
+    
+    <!-- 为车辆1启动 simulator -->
+    <include file="$(find simple_planning_simulator)/launch/simple_planning_simulator.launch"/>
+    
+    <!-- 为车辆1启动 mission_planner -->
+    <include file="$(find mission_planner)/launch/mission_planning.launch">
+      <arg name="goal_topic_name" value="/vehicle_1/move_base_simple/goal" />
+      <arg name="checkpoint_topic_name" value="/vehicle_1/move_base_simple/goal" />
+      <arg name="rout_topic_name" value="/vehicle_1/planning/mission_planning/route" />
+      <arg name="visualization_topic_name" value="/vehicle_1/planning/mission_planning/route_marker" />
+    </include>
+  </group>
+
+  <!-- ========== 车辆2 ========== -->
+  <group ns="vehicle_2">
+    <param name="vehicle_id" value="2" />
+    
+    <!-- 为车辆2启动 simulator -->
+    <include file="$(find simple_planning_simulator)/launch/simple_planning_simulator.launch"/>
+    
+    <!-- 为车辆2启动 mission_planner -->
+    <include file="$(find mission_planner)/launch/mission_planning.launch">
+      <arg name="goal_topic_name" value="/vehicle_2/move_base_simple/goal" />
+      <arg name="checkpoint_topic_name" value="/vehicle_2/move_base_simple/goal" />
+      <arg name="rout_topic_name" value="/vehicle_2/planning/mission_planning/route" />
+      <arg name="visualization_topic_name" value="/vehicle_2/planning/mission_planning/route_marker" />
+    </include>
+  </group>
+
+  <!-- ========== 车辆3 ========== -->
+  <group ns="vehicle_3">
+    <param name="vehicle_id" value="3" />
+    
+    <!-- 为车辆3启动 simulator -->
+    <include file="$(find simple_planning_simulator)/launch/simple_planning_simulator.launch"/>
+    
+    <!-- 为车辆3启动 mission_planner -->
+    <include file="$(find mission_planner)/launch/mission_planning.launch">
+      <arg name="goal_topic_name" value="/vehicle_3/move_base_simple/goal" />
+      <arg name="checkpoint_topic_name" value="/vehicle_3/move_base_simple/goal" />
+      <arg name="rout_topic_name" value="/vehicle_3/planning/mission_planning/route" />
+      <arg name="visualization_topic_name" value="/vehicle_3/planning/mission_planning/route_marker" />
+    </include>
+  </group>
+
+  <!-- ========== Multi-Vehicle Marker Relay ========== -->
+  <node pkg="multi_vehicle_visualizer" type="relay_marker_array" name="multi_vehicle_marker_relay" output="screen">
+    <param name="num_vehicles" value="3" />
+  </node>
+
+  <!-- RViz 可视化 -->
+  <node pkg="rviz" type="rviz" name="rviz" args="-d $(find map_loader)/loader.rviz" />
+
+</launch>

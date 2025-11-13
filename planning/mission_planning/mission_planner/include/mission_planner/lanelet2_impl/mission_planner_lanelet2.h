@@ -45,6 +45,11 @@ public:
 
 private:
   bool is_graph_ready_;
+  
+  // ★ 新增：车辆 ID
+  int vehicle_id_;
+
+  ros::NodeHandle nh_; // 添加全局节点句柄
 
   lanelet::LaneletMapPtr lanelet_map_ptr_;
   lanelet::routing::RoutingGraphPtr routing_graph_ptr_;
@@ -69,11 +74,12 @@ private:
   bool planFullCoveragePath(
     const geometry_msgs::PoseStamped& start_checkpoint,
     const geometry_msgs::PoseStamped& goal_checkpoint,
-    lanelet::ConstLanelets* path_lanelets_ptr) const;
+    lanelet::ConstLanelets* path_lanelets_ptr);
   lanelet::ConstLanelets getMainLanelets(
     const lanelet::ConstLanelets & path_lanelets, const RouteHandler & lanelet_sequence_finder);
   RouteSections createRouteSections(
     const lanelet::ConstLanelets & main_path, const RouteHandler & route_handler);
+
 };
 }  // namespace mission_planner
 

@@ -1,8 +1,9 @@
 cmake_minimum_required(VERSION 2.8.3)
 project(lanelet2_map_preprocessor)
 
-# add_compile_options(-std=c++14)
-add_compile_options(-std=c++11) 
+add_compile_options(-std=c++14)
+add_compile_options(-fconcepts)
+# add_compile_options(-std=c++11) 
 #add_compile_options(-std=gnu++11)
 add_compile_options(-fext-numeric-literals)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DBOOST_MATH_DISABLE_FLOAT128")
